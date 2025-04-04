@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'fare_page.dart';
+import 'package:geolocator/geolocator.dart';
 
 void main() {
   runApp(const BusTrackingApp());
@@ -147,18 +148,107 @@ class StopsListPage extends StatefulWidget {
 class _StopsListPageState extends State<StopsListPage> {
   String? selectedSource;
   String? selectedDestination;
+  bool isLoadingLocation = true;
+  String? locationError;
+
+  @override
+  void initState() {
+    super.initState();
+    _getNearestBusStop();
+  }
+
+  Future<void> _getNearestBusStop() async {
+    try {
+      // Get current location
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw Exception('Location services are disabled.');
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          throw Exception('Location permissions are denied');
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        throw Exception('Location permissions are permanently denied');
+      }
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      print('\n=== Finding Nearest Bus Stop ===');
+      print('Your Location: Latitude=${position.latitude}, Longitude=${position.longitude}');
+
+      // Get nearest bus stop from API
+      final url = Uri.parse('http://192.168.1.10:8080/nearest-stop?lat=${position.latitude}&lon=${position.longitude}');
+      print('API URL: $url');
+      
+      final response = await http.get(url);
+      print('API Response Status: ${response.statusCode}');
+      print('API Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        print('Decoded Response: $data');
+        
+        // Check if the response has the expected format
+        if (data is! Map<String, dynamic>) {
+          throw Exception('Invalid API response format');
+        }
+
+        // Try different possible field names
+        final stopName = data['stopname'] ?? data['stopName'] ?? data['name'] ?? data['stop'] ?? data['busStop'];
+        
+        if (stopName == null) {
+          print('Available fields in response: ${data.keys.join(', ')}');
+          throw Exception('No bus stop found in the response. Available fields: ${data.keys.join(', ')}');
+        }
+
+        print('Found Nearest Bus Stop: $stopName');
+
+        // Check if the nearest stop exists in our list of stops (case-insensitive)
+        bool stopExists = widget.stops.any((stop) => 
+          stop.toLowerCase() == stopName.toLowerCase()
+        );
+
+        if (stopExists) {
+          // Find the exact case version from our stops list
+          final exactStopName = widget.stops.firstWhere(
+            (stop) => stop.toLowerCase() == stopName.toLowerCase()
+          );
+          
+          setState(() {
+            selectedSource = exactStopName;
+            isLoadingLocation = false;
+          });
+        } else {
+          print('Available stops in route: ${widget.stops.join(', ')}');
+          throw Exception('Nearest bus stop "$stopName" not found in this bus route');
+        }
+      } else {
+        throw Exception('Failed to get nearest bus stop. Status code: ${response.statusCode}, Response: ${response.body}');
+      }
+    } catch (e) {
+      print('Error: $e');
+      setState(() {
+        locationError = e.toString();
+        isLoadingLocation = false;
+      });
+    }
+  }
 
   void _toggleStop(String stop) {
     setState(() {
-      if (selectedSource == stop) {
-        selectedSource = null;
-      } else if (selectedDestination == stop) {
+      if (selectedDestination == stop) {
         selectedDestination = null;
-      } else if (selectedSource == null) {
-        selectedSource = stop;
       } else if (selectedDestination == null) {
         selectedDestination = stop;
-        // Navigate to fare page when both are selected
+        // Navigate to fare page when destination is selected
         _navigateToFarePage();
       }
     });
@@ -191,7 +281,6 @@ class _StopsListPageState extends State<StopsListPage> {
       appBar: AppBar(
         title: Row(
           children: [
-            // Bus logo
             Container(
               padding: const EdgeInsets.only(right: 12),
               child: const Icon(
@@ -206,7 +295,42 @@ class _StopsListPageState extends State<StopsListPage> {
       ),
       body: Column(
         children: [
-          if (selectedSource != null || selectedDestination != null)
+          if (isLoadingLocation)
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.tealAccent),
+                ),
+              ),
+            )
+          else if (locationError != null)
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Center(
+                child: Column(
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 48,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Error: $locationError',
+                      style: const TextStyle(color: Colors.red),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _getNearestBusStop,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else if (selectedSource != null)
             Card(
               margin: const EdgeInsets.all(16),
               color: Theme.of(context).colorScheme.surface,
@@ -215,8 +339,35 @@ class _StopsListPageState extends State<StopsListPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (selectedSource != null)
-                      Row(
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.location_on,
+                          color: Colors.tealAccent,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Nearest Bus Stop',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.tealAccent,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.tealAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.tealAccent.withOpacity(0.3),
+                        ),
+                      ),
+                      child: Row(
                         children: [
                           Container(
                             width: 12,
@@ -226,27 +377,40 @@ class _StopsListPageState extends State<StopsListPage> {
                               shape: BoxShape.circle,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Text('Source: $selectedSource'),
-                        ],
-                      ),
-                    if (selectedDestination != null) ...[
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Container(
-                            width: 12,
-                            height: 12,
-                            decoration: const BoxDecoration(
-                              color: Colors.red,
-                              shape: BoxShape.circle,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  selectedSource!,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                const Text(
+                                  'This is your nearest bus stop',
+                                  style: TextStyle(
+                                    color: Colors.grey,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Text('Destination: $selectedDestination'),
                         ],
                       ),
-                    ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Select your destination from the list below',
+                      style: TextStyle(
+                        color: Colors.grey,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
                   ],
                 ),
               ),
