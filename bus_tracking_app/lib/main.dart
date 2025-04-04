@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'screens/landing_page.dart';
 import 'screens/qr_scanner_page.dart';
 
 void main() {
@@ -21,7 +22,7 @@ class BusTrackingApp extends StatelessWidget {
           background: Color(0xFF121212),
         ),
       ),
-      home: const QRScannerPage(),
+      home: const LandingPage(),
     );
   }
 }
